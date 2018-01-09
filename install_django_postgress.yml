@@ -1,0 +1,91 @@
+- hosts: webserver-django
+  vars:
+    postgresql_service_name: "postgresql"
+    virtualenv_dir: /home/{{ ansible_user }}/django-cms-env
+    app_name: MyApp
+    app_folder: /home/{{ ansible_user }}/{{ app_name }}
+  tasks:
+    - name: Update repos information. Upgrade all packages
+      apt:
+        update_cache: yes
+        upgrade: yes
+        cache_valid_time: 86400
+      become: true
+
+    - name: Install postgresql, postgresql-contrib and requrements
+      apt:
+        name: "{{ item }}"
+        state: installed
+        update_cache: yes
+        cache_valid_time: 3600
+      with_items:
+        - postgresql
+        - postgresql-contrib
+        - libpq-dev
+        - postgresql-client
+        - python-dev
+        - python-pip
+        - virtualenv
+      become: true
+
+    - name: Ensure PostgreSQL is running
+      service:
+        name: "{{ postgresql_service_name }}"
+        state: started
+
+    - name: Install django-cms into virtualenv into user home directory
+      pip:
+        name: django-cms
+        virtualenv: "{{ virtualenv_dir }}"
+
+    - name: check that the application already exists
+      command: "ls {{ app_name }}"
+      register: appstatus
+      # ignore_errors: True
+
+    - name: Create django app
+      command: "{{ virtualenv_dir }}/bin/django-admin startproject {{ app_name }}"
+      when: appstatus.rc != 0
+
+    - name: pull settings.py
+      template:
+        src: ../configs/settings_django_crm.j2
+        dest: "{{ app_folder }}/{{ app_name }}/settings.py"
+
+    - name: pull urls.pu
+      template:
+        src: ../configs/django_crm_urls.j2
+        dest: "{{ app_folder }}/{{ app_name }}/urls.py"
+
+    # - name: Create templates folder
+    #   file:
+    #     path: "{{ app_name }}/templates"
+    #     state: directory
+    #     owner: "{{ ansible_user }}"
+    #     group: "{{ ansible_user }}"
+    #     mode: 0775
+
+    - name: pull templates
+      copy:
+        src: templates/
+        dest: "{{ app_folder }}/templates"
+        owner: "{{ ansible_user }}"
+        group: "{{ ansible_user }}"
+
+    - name: migrate db
+      django_manage:
+        command: "migrate"
+        app_path: "{{ app_folder }}"
+        virtualenv: "{{ virtualenv_dir }}"
+
+    - name: create superuser
+      django_manage:
+        command: "createsuperuser"
+        app_path: "{{ app_folder }}"
+        virtualenv: "{{ virtualenv_dir }}"
+
+    - name: Check everything right
+      django_manage:
+        command: "cms check"
+        app_path: "{{ app_folder }}"
+        virtualenv: "{{ virtualenv_dir }}"
