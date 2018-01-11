@@ -12,7 +12,6 @@
     - name: Update repos information. Upgrade all packages
       apt:
         update_cache: yes
-        upgrade: yes
         cache_valid_time: 86400
       become: true
 
@@ -36,8 +35,11 @@
 
     - name: Install django-cms into virtualenv into user home directory
       pip:
-        name: django-cms
+        name: "{{ item }}"
         virtualenv: "{{ virtualenv_dir }}"
+      with_items:
+        - django-cms
+        - gunicorn
 
     - name: Ensure PostgreSQL is running
       service:
@@ -132,10 +134,22 @@
         virtualenv: "{{ virtualenv_dir }}"
 
     - name: copy nginx config
-      template: src=configs/nginx.j2 dest=/etc/nginx/sites-enabled/django-cms.conf
+      template:
+        src: configs/nginx.j2
+        dest: /etc/nginx/sites-enabled/django-cms.conf
       become: true
+
+    - name: remove default nginx configs
+      file:
+        state: absent
+        path: /etc/nginx/sites-available/default
       notify:
-      - restart nginx
+        - restart nginx
+
+    - name: push gunicorn systemd configs
+      template:
+        src: configs/gunicorn.j2
+        dest: /etc/systemd/system/gunicorn.service
 
   handlers:
   - name: restart nginx
