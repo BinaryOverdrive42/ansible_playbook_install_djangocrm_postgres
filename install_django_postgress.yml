@@ -33,27 +33,29 @@
         - nginx
       become: true
 
-    - name: Install django-cms into virtualenv into user home directory
+    - name: django | Install django-cms and gunicorn into virtualenv into user home directory
       pip:
         name: "{{ item }}"
         virtualenv: "{{ virtualenv_dir }}"
       with_items:
         - django-cms
         - gunicorn
+      become: true
+      become_user: "{{ ansible_user }}"
 
-    - name: Ensure PostgreSQL is running
+    - name: postgres | Ensure PostgreSQL is running
       service:
         name: "{{ postgresql_service_name }}"
         state: started
 
-    - name: create database user
+    - name: postgres | create database user
       become_user: postgres
       postgresql_user:
         name: "{{ db_user }}"
         password: "{{ db_password }}"
       become: true
 
-    - name: create database
+    - name: postgres | create database
       become_user: postgres
       postgresql_db:
         name: "{{ db_name }}"
@@ -63,26 +65,29 @@
         lc_ctype: en_US.UTF-8
       become: true
 
-    - name: check that the application already exists
+    - name: django | check that the application already exists
       command: "ls {{ app_name }}"
       register: appstatus
       ignore_errors: True
 
-    - name: Create django app
+    - name: django | Create django app
       command: "{{ virtualenv_dir }}/bin/django-admin startproject {{ app_name }}"
       when: appstatus.rc != 0
+      become: true
+      become_user: "{{ ansible_user }}"
 
-    - name: pull settings.py
+
+    - name: django | pull settings.py
       template:
         src: ../configs/settings_django_crm.j2
         dest: "{{ app_folder }}/{{ app_name }}/settings.py"
 
-    - name: pull urls.pu
+    - name: django | pull urls.pu
       template:
         src: ../configs/django_crm_urls.j2
         dest: "{{ app_folder }}/{{ app_name }}/urls.py"
 
-    - name: pull templates
+    - name: django | pull templates
       copy:
         src: templates/
         dest: "{{ app_folder }}/templates"
@@ -90,44 +95,42 @@
         group: "{{ ansible_user }}"
 
 
-    - name: migrate db
+    - name: django | migrate db
       django_manage:
         command: "migrate"
         app_path: "{{ app_folder }}"
         virtualenv: "{{ virtualenv_dir }}"
 
-    # - name: Check if django superuser exists
-    #   django_manage:
-    #     virtualenv: "{{ virtualenv_dir }}"
-    #     app_path: "{{ app_folder }}"
-    #     command: shell -c 'import sys; from django.contrib.auth.models import User; sys.exit(0 if User.objects.filter(username="admin").count() > 0 else 1)'
-    #   register: checksuperuser
-    #   ignore_errors: True
+    - name: postgres | push example.sql
+      template:
+        src: example.sql
+        dest: "{{app_folder}}/example.sql"
 
-    - name: create superuser
+    - name: postgres | restore a single schema for an existing database
+      become_user: postgres
+      become: true
+      shell: "psql {{ db_name }} < {{ app_folder }}/example.sql"
+
+    - name: django | collectstatic
+      django_manage:
+        command: "collectstatic"
+        app_path: "{{ app_folder }}"
+        virtualenv: "{{ virtualenv_dir }}"
+
+    - name: django | create superuser
       django_manage:
         command: "createsuperuser --noinput --username={{ db_user }} --email={{ db_user }}@example.com"
         app_path: "{{ app_folder }}"
         virtualenv: "{{ virtualenv_dir }}"
       ignore_errors: true
-      # when: checksuperuser.rc != 0
 
-    # - name: push script for change password for superuser
-    #   template:
-    #     src: ../scripts/changepassword.sh.j2
-    #     dest: "{{ app_folder }}/changepassword.sh"
-    #     mode: 0755
-    #
-    # - name: Change password
-    #   command: "{{app_folder}}/changepassword.sh"
-
-    - name: change superuser password
+    - name: django | change superuser password
       django_manage:
         virtualenv: "{{ virtualenv_dir }}"
         app_path: "{{ app_folder }}"
         command: shell -c "from django.contrib.auth.models import User; usr=User.objects.get(username='{{ db_user }}'); usr.set_password('{{ django_user_password }}'); usr.save()"
 
-    - name: Check everything right
+    - name: django | Check everything right
       django_manage:
         command: "cms check"
         app_path: "{{ app_folder }}"
@@ -150,6 +153,19 @@
       template:
         src: configs/gunicorn.j2
         dest: /etc/systemd/system/gunicorn.service
+
+    - name: enable gunicorn service
+      systemd:
+        name: gunicorn
+        enabled: yes
+
+    - name: restart gunicorn service
+      systemd:
+        name: gunicorn
+        state: restarted
+      notify:
+        - restart nginx
+
 
   handlers:
   - name: restart nginx
